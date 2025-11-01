@@ -4,31 +4,12 @@
     <meta charset="UTF-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
     <style>
-        @font-face {
-            font-family: 'DejaVu Sans';
-            src: local('DejaVu Sans');
-        }
-        
-        @page {
-            size: A4;
-            margin: 2cm 1.5cm;
-            @top-center {
-                content: "MUAYENE RAPORU";
-                font-size: 10pt;
-                color: #666;
-            }
-            @bottom-center {
-                content: "Sayfa " counter(page) " / " counter(pages);
-                font-size: 9pt;
-                color: #666;
-            }
-        }
-        
         body {
-            font-family: 'DejaVu Sans', 'Segoe UI', Arial, sans-serif;
+            font-family: Arial, sans-serif;
             font-size: 11pt;
             line-height: 1.6;
             color: #333;
+            margin: 20px;
         }
         
         .header {
@@ -67,19 +48,19 @@
         }
         
         .info-row {
-            display: flex;
             margin-bottom: 8px;
         }
         
         .info-label {
             font-weight: bold;
-            width: 150px;
             color: #2c3e50;
+            display: inline-block;
+            width: 150px;
         }
         
         .info-value {
-            flex: 1;
             color: #555;
+            display: inline-block;
         }
         
         .measurement-table {
@@ -94,19 +75,12 @@
             padding: 12px;
             text-align: left;
             font-weight: bold;
+            border: 1px solid #2c3e50;
         }
         
         .measurement-table td {
             padding: 10px 12px;
-            border-bottom: 1px solid #ddd;
-        }
-        
-        .measurement-table tr:nth-child(even) {
-            background-color: #f8f9fa;
-        }
-        
-        .measurement-table tr:hover {
-            background-color: #e8f4f8;
+            border: 1px solid #ddd;
         }
         
         .notes-section {
@@ -114,7 +88,6 @@
             border: 1px solid #f0e68c;
             padding: 15px;
             margin-top: 20px;
-            border-radius: 5px;
         }
         
         .notes-section h3 {
@@ -124,8 +97,6 @@
         
         .signature-section {
             margin-top: 50px;
-            display: flex;
-            justify-content: space-between;
         }
         
         .signature-box {
@@ -133,6 +104,8 @@
             border-top: 2px solid #2c3e50;
             padding-top: 10px;
             text-align: center;
+            display: inline-block;
+            margin-right: 5%;
         }
         
         .footer-note {
@@ -150,15 +123,7 @@
             border-radius: 20px;
             font-weight: bold;
             font-size: 10pt;
-        }
-        
-        .status-success {
             background-color: #27ae60;
-            color: white;
-        }
-        
-        .status-warning {
-            background-color: #f39c12;
             color: white;
         }
         
@@ -178,52 +143,96 @@
     </div>
     
     <div class="info-section">
-        <h2>GENEL BİLGİLER</h2>
+        <h2>GENEL BILGILER</h2>
         <div class="info-row">
-            <div class="info-label">Rapor No:</div>
-            <div class="info-value">{{ rapor_no }}</div>
+            <span class="info-label">Rapor No:</span>
+            <span class="info-value">{{ rapor_no }}</span>
         </div>
         <div class="info-row">
-            <div class="info-label">Muayene Türü:</div>
-            <div class="info-value">{{ muayene_turu }}</div>
+            <span class="info-label">Muayene Türü:</span>
+            <span class="info-value">{{ muayene_turu }}</span>
         </div>
         <div class="info-row">
-            <div class="info-label">Tarih:</div>
-            <div class="info-value">{{ tarih }}</div>
+            <span class="info-label">Tarih:</span>
+            <span class="info-value">{{ tarih }}</span>
         </div>
         <div class="info-row">
-            <div class="info-label">Teknisyen:</div>
-            <div class="info-value">{{ teknisyen }}</div>
+            <span class="info-label">Teknisyen:</span>
+            <span class="info-value">{{ teknisyen }}</span>
         </div>
     </div>
     
     <div class="info-section">
-        <h2>CİHAZ BİLGİLERİ</h2>
+        <h2>CIHAZ BILGILERI</h2>
         <div class="info-row">
-            <div class="info-label">Marka:</div>
-            <div class="info-value">{{ cihaz_bilgileri.marka }}</div>
+            <span class="info-label">Marka:</span>
+            <span class="info-value">{{ cihaz_bilgileri.marka }}</span>
         </div>
         <div class="info-row">
-            <div class="info-label">Model:</div>
-            <div class="info-value">{{ cihaz_bilgileri.model }}</div>
+            <span class="info-label">Model:</span>
+            <span class="info-value">{{ cihaz_bilgileri.model }}</span>
         </div>
         <div class="info-row">
-            <div class="info-label">Seri No:</div>
-            <div class="info-value">{{ cihaz_bilgileri.seri_no }}</div>
+            <span class="info-label">Seri No:</span>
+            <span class="info-value">{{ cihaz_bilgileri.seri_no }}</span>
         </div>
     </div>
     
     <div class="iso-notice">
-        <strong>ℹ️ ISO/IEC 17020 Uyarısı:</strong> Bu rapor, muayene kuruluşu tarafından ISO/IEC 17020 standardına uygun olarak hazırlanmıştır.
+        <strong>ISO/IEC 17020 Uyarisi:</strong> Bu rapor, muayene kurulusu tarafindan ISO/IEC 17020 standardina uygun olarak hazirlanmistir.
     </div>
     
-    <h2 style="color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px;">ÖLÇÜM SONUÇLARI</h2>
+    {% if gorsel_analiz %}
+    <div class="info-section">
+        <h2>GORSEL ANALIZ SONUCLARI</h2>
+        <div class="info-row">
+            <span class="info-label">Cihaz Turu:</span>
+            <span class="info-value">{{ gorsel_analiz.cihaz_turu }}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Gorsel Durum:</span>
+            <span class="info-value">{{ gorsel_analiz.gorsel_durum }}</span>
+        </div>
+        {% if gorsel_analiz.gosterge_deger %}
+        <div class="info-row">
+            <span class="info-label">Gosterge Degeri:</span>
+            <span class="info-value">{{ gorsel_analiz.gosterge_deger }}</span>
+        </div>
+        {% endif %}
+        {% if gorsel_analiz.anomaliler %}
+        <div class="info-row">
+            <span class="info-label">Anomaliler:</span>
+            <span class="info-value">
+                <ul style="margin: 0; padding-left: 20px;">
+                {% for anomali in gorsel_analiz.anomaliler %}
+                    <li>{{ anomali }}</li>
+                {% endfor %}
+                </ul>
+            </span>
+        </div>
+        {% endif %}
+        {% if gorsel_analiz.oneriler %}
+        <div class="info-row">
+            <span class="info-label">Oneriler:</span>
+            <span class="info-value">
+                <ul style="margin: 0; padding-left: 20px;">
+                {% for oneri in gorsel_analiz.oneriler %}
+                    <li>{{ oneri }}</li>
+                {% endfor %}
+                </ul>
+            </span>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+    
+    <h2 style="color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px;">OLCUM SONUCLARI</h2>
     
     <table class="measurement-table">
         <thead>
             <tr>
                 <th>Parametre</th>
-                <th>Ölçülen Değer</th>
+                <th>Olculen Deger</th>
                 <th>Durum</th>
             </tr>
         </thead>
@@ -232,14 +241,14 @@
             <tr>
                 <td><strong>{{ parametre }}</strong></td>
                 <td>{{ deger }}</td>
-                <td><span class="status-badge status-success">✓ Normal</span></td>
+                <td><span class="status-badge">Normal</span></td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
     
     <div class="notes-section">
-        <h3>📋 NOTLAR VE GÖZLEMLER</h3>
+        <h3>NOTLAR VE GOZLEMLER</h3>
         <p>{{ notlar }}</p>
     </div>
     
@@ -252,15 +261,14 @@
         <div class="signature-box">
             <strong>Onaylayan</strong><br>
             _____________________<br>
-            <small>İmza ve Tarih</small>
+            <small>Imza ve Tarih</small>
         </div>
     </div>
     
     <div class="footer-note">
-        <p><strong>DİKKAT:</strong> Bu rapor izinsiz çoğaltılamaz ve değiştirilemez.</p>
-        <p>Bu belge elektronik olarak oluşturulmuştur ve dijital imza içermektedir.</p>
-        <p>Rapor No: {{ rapor_no }} | Oluşturulma Tarihi: {{ tarih }}</p>
+        <p><strong>DIKKAT:</strong> Bu rapor izinsiz cogaltilamaz ve degistirilemez.</p>
+        <p>Bu belge elektronik olarak olusturulmustur.</p>
+        <p>Rapor No: {{ rapor_no }} | Olusturulma Tarihi: {{ tarih }}</p>
     </div>
 </body>
 </html>
-

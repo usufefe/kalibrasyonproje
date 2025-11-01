@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+*.iml
+.idea/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+
+# Sensitive
+.env
+production.env
+*.pem
+*.key
+
+# Uploads
+uploads/*.pdf
+uploads/*.wav
+uploads/*.webm
+uploads/*.m4a
+!uploads/.gitkeep
+

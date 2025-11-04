@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:record/record.dart';
-import 'dart:html' as html;
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:file_picker/file_picker.dart';
 
 class KalibrasyonFormPage extends StatefulWidget {
   @override
@@ -383,34 +383,34 @@ class _KalibrasyonFormPageState extends State<KalibrasyonFormPage> {
     );
   }
 
-  void _fotografEkle() {
-    final input = html.FileUploadInputElement()..accept = 'image/*';
-    input.click();
-    input.onChange.listen((e) {
-      final files = input.files;
-      if (files?.isNotEmpty ?? false) {
-        final file = files!.first;
-        // Fotoğraf yükleme işlemi
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Fotoğraf eklendi: ${file.name}')),
-        );
-      }
-    });
+  Future<void> _fotografEkle() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: false,
+    );
+    
+    if (result != null && result.files.isNotEmpty) {
+      final file = result.files.first;
+      _fotograflar.add(file.path ?? file.name);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Fotoğraf eklendi: ${file.name}')),
+      );
+      setState(() {});
+    }
   }
 
-  void _dosyaEkle() {
-    final input = html.FileUploadInputElement();
-    input.click();
-    input.onChange.listen((e) {
-      final files = input.files;
-      if (files?.isNotEmpty ?? false) {
-        final file = files!.first;
-        // Dosya yükleme işlemi
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Dosya eklendi: ${file.name}')),
-        );
-      }
-    });
+  Future<void> _dosyaEkle() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      allowMultiple: false,
+    );
+    
+    if (result != null && result.files.isNotEmpty) {
+      final file = result.files.first;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Dosya eklendi: ${file.name}')),
+      );
+    }
   }
 
   void _toggleRecording() async {

@@ -53,6 +53,16 @@ class _OrganizasyonListPageState extends State<OrganizasyonListPage> {
         backgroundColor: Colors.blue.shade700,
         actions: [
           IconButton(
+            icon: Icon(Icons.refresh),
+            onPressed: _loadOrganizasyonlar,
+            tooltip: 'Yenile',
+          ),
+          IconButton(
+            icon: Icon(Icons.straighten),
+            onPressed: () => Navigator.pushNamed(context, '/kumpas_raporlar'),
+            tooltip: 'KUMPAS Raporları',
+          ),
+          IconButton(
             icon: Icon(Icons.description),
             onPressed: () => Navigator.pushNamed(context, '/raporlar'),
             tooltip: 'Tüm Raporlar',
@@ -72,11 +82,37 @@ class _OrganizasyonListPageState extends State<OrganizasyonListPage> {
                 ],
               ),
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _yeniOrganizasyon,
-        icon: Icon(Icons.add),
-        label: Text('Yeni Organizasyon'),
-        backgroundColor: Colors.blue.shade700,
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          // KUMPAS Test Butonu
+          if (_organizasyonlar.isNotEmpty)
+            FloatingActionButton.extended(
+              onPressed: () {
+                final ilkOrg = _organizasyonlar.first;
+                Navigator.pushNamed(
+                  context,
+                  '/kumpas_kalibrasyon',
+                  arguments: {
+                    'organizasyonId': ilkOrg['id'],
+                    'organizasyonAd': ilkOrg['ad'],
+                  },
+                );
+              },
+              icon: Icon(Icons.straighten),
+              label: Text('🧪 KUMPAS Test'),
+              backgroundColor: Colors.green.shade700,
+              heroTag: 'kumpas',
+            ),
+          SizedBox(height: 16),
+          FloatingActionButton.extended(
+            onPressed: _yeniOrganizasyon,
+            icon: Icon(Icons.add),
+            label: Text('Yeni Organizasyon'),
+            backgroundColor: Colors.blue.shade700,
+            heroTag: 'yeni',
+          ),
+        ],
       ),
     );
   }

@@ -15,13 +15,14 @@ class DurumEnum(str, enum.Enum):
 
 
 class CihazTipiEnum(str, enum.Enum):
-    KUMPAS = "kumpas"
-    MIKROMETRE = "mikrometre"
-    TERAZI = "terazi"
-    BASINC_TRANSMITTERI = "basinc_transmitteri"
-    SICAKLIK_OLCER = "sicaklik_olcer"
-    MULTIMETRE = "multimetre"
-    DIGER = "diger"
+    KUMPAS = "KUMPAS"
+    MIKROMETRE = "MIKROMETRE"
+    TERAZI = "TERAZI"
+    BASINC_TRANSMITTERI = "BASINC_TRANSMITTERI"
+    SICAKLIK_OLCER = "SICAKLIK_OLCER"
+    MULTIMETRE = "MULTIMETRE"
+    PLASMA_ARC_WELDING = "PLASMA_ARC_WELDING"
+    DIGER = "DIGER"
 
 
 class Organizasyon(Base):

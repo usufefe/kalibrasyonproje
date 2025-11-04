@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:convert';
-import 'dart:html' as html;
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'home_page.dart';
 
 class ReportPage extends StatelessWidget {
-  final String pdfPath; // Base64 string for web
+  final String pdfPath; // Base64 string
   final String transcribedText;
   final Map<String, dynamic> reportData;
 
@@ -16,12 +19,30 @@ class ReportPage extends StatelessWidget {
   });
 
   Future<void> _openPdf() async {
-    // Web için PDF'i indirme
-    final bytes = base64Decode(pdfPath);
-    final blob = html.Blob([bytes], 'application/pdf');
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    html.window.open(url, '_blank');
-    html.Url.revokeObjectUrl(url);
+    try {
+      final bytes = base64Decode(pdfPath);
+      
+      if (kIsWeb) {
+        // Web için - data URL kullanarak aç
+        final dataUrl = 'data:application/pdf;base64,$pdfPath';
+        final uri = Uri.parse(dataUrl);
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri);
+        }
+      } else {
+        // Desktop/Mobile için - geçici dosyaya kaydet ve aç
+        final directory = await getTemporaryDirectory();
+        final file = File('${directory.path}/kalibrasyon_raporu_${DateTime.now().millisecondsSinceEpoch}.pdf');
+        await file.writeAsBytes(bytes);
+        
+        final uri = Uri.file(file.path);
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri);
+        }
+      }
+    } catch (e) {
+      print('PDF açma hatası: $e');
+    }
   }
 
   @override

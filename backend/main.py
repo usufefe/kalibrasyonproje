@@ -16,10 +16,12 @@ import asyncio
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
+from sqlalchemy.orm import selectinload
 from database import get_db
 from models import KalibrasyonRaporu, OlcumSonucu, RaporDosya
 from new_models import Organizasyon, CihazTanim, Kalibrasyon, DurumEnum, CihazTipiEnum
 from standards_models import CalibrasyonStandardi, StandardSablon, SablonParametre
+from kumpas_word_generator import create_kumpas_certificate
 
 # production.env dosyasını yükle
 env_file = Path(__file__).parent / "production.env"
@@ -1494,6 +1496,494 @@ async def get_template_parameters(template_id: int, db: AsyncSession = Depends(g
             for p in parametreler
         ]
     }
+
+
+# ============================================================================
+# KUMPAS KALİBRASYON API'LERİ
+# ============================================================================
+
+class KumpasOlcumVerisi(BaseModel):
+    """Tek bir test noktası için ölçüm verisi"""
+    referans_deger: float  # 25.00
+    okunan_deger: float    # 25.02
+    sapma: Optional[float] = None  # Otomatik hesaplanır
+    belirsizlik: float = 0.030  # ±0.030 mm (AS KALİBRASYON'dan)
+
+
+class KumpasParametreOlcumleri(BaseModel):
+    """Bir parametre için tüm ölçümler"""
+    parametre_kodu: str  # dis_olcum, ic_olcum vb.
+    parametre_adi: str
+    olcumler: List[KumpasOlcumVerisi]
+
+
+class KumpasFonksiyonelKontrol(BaseModel):
+    """Fonksiyonellik kontrolleri"""
+    olcme_ceneleri: str = "Uygun"  # Uygun / Uygun Değil
+    tespit_vidasi: str = "Uygun"
+    gosterge: str = "Uygun"
+    tambur_vernier: str = "Uygun"
+
+
+class KumpasKalibrasyonTalep(BaseModel):
+    """KUMPAS kalibrasyon talebi"""
+    organizasyon_id: int
+    cihaz_seri_no: str
+    cihaz_marka: Optional[str] = None
+    cihaz_model: Optional[str] = None
+    olcme_araligi: str = "0-150 mm"
+    cozunurluk: str = "0,02 mm"
+    
+    # Ölçüm verileri
+    dis_olcum: List[KumpasOlcumVerisi]
+    ic_olcum: Optional[List[KumpasOlcumVerisi]] = None
+    orta_olcum: Optional[List[KumpasOlcumVerisi]] = None
+    derinlik_olcum: Optional[List[KumpasOlcumVerisi]] = None
+    kademe_olcum: Optional[List[KumpasOlcumVerisi]] = None
+    
+    # Fonksiyonellik
+    fonksiyonellik: KumpasFonksiyonelKontrol
+    
+    # Çevre koşulları
+    sicaklik: float  # 20.0
+    nem: float  # 45.0
+    
+    # Referans cihazlar
+    referans_cihazlar: Optional[List[dict]] = None
+    
+    # Notlar
+    notlar: Optional[str] = None
+
+
+@app.post("/api/calibration/kumpas/create")
+async def create_kumpas_calibration(
+    talep: KumpasKalibrasyonTalep,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    KUMPAS kalibrasyon kaydı oluştur ve sapmaları otomatik hesapla
+    """
+    
+    try:
+        # 1. Sapmaları hesapla
+        def hesapla_sapma(olcumler: List[KumpasOlcumVerisi]):
+            for olcum in olcumler:
+                olcum.sapma = round(olcum.okunan_deger - olcum.referans_deger, 3)
+            return olcumler
+        
+        talep.dis_olcum = hesapla_sapma(talep.dis_olcum)
+        if talep.ic_olcum:
+            talep.ic_olcum = hesapla_sapma(talep.ic_olcum)
+        if talep.orta_olcum:
+            talep.orta_olcum = hesapla_sapma(talep.orta_olcum)
+        if talep.derinlik_olcum:
+            talep.derinlik_olcum = hesapla_sapma(talep.derinlik_olcum)
+        if talep.kademe_olcum:
+            talep.kademe_olcum = hesapla_sapma(talep.kademe_olcum)
+        
+        # 2. Uygunluk kontrolü (±0.02mm tolerans)
+        uygun = True
+        tolerans = 0.02
+        
+        for olcum in talep.dis_olcum:
+            if abs(olcum.sapma) > tolerans:
+                uygun = False
+                break
+        
+        # 3. Cihaz tanımını bul veya oluştur
+        result = await db.execute(
+            select(CihazTanim).where(CihazTanim.seri_no == talep.cihaz_seri_no)
+        )
+        cihaz = result.scalar_one_or_none()
+        
+        if not cihaz:
+            cihaz = CihazTanim(
+                cihaz_kodu=f"KUMPAS-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                cihaz_adi="Kumpas",
+                cihaz_tipi=CihazTipiEnum.KUMPAS,
+                marka=talep.cihaz_marka,
+                model=talep.cihaz_model,
+                seri_no=talep.cihaz_seri_no,
+                olcme_araligi=talep.olcme_araligi,
+                cozunurluk=talep.cozunurluk
+            )
+            db.add(cihaz)
+            await db.flush()
+        
+        # 4. Kalibrasyon kaydı oluştur
+        kalibrasyon = Kalibrasyon(
+            organizasyon_id=talep.organizasyon_id,
+            cihaz_id=cihaz.id,
+            sicaklik=talep.sicaklik,
+            nem=talep.nem,
+            olcum_verileri={
+                "dis_olcum": [olcum.dict() for olcum in talep.dis_olcum],
+                "ic_olcum": [olcum.dict() for olcum in talep.ic_olcum] if talep.ic_olcum else [],
+                "orta_olcum": [olcum.dict() for olcum in talep.orta_olcum] if talep.orta_olcum else [],
+                "derinlik_olcum": [olcum.dict() for olcum in talep.derinlik_olcum] if talep.derinlik_olcum else [],
+                "kademe_olcum": [olcum.dict() for olcum in talep.kademe_olcum] if talep.kademe_olcum else [],
+                "fonksiyonellik": talep.fonksiyonellik.dict(),
+                "referans_cihazlar": talep.referans_cihazlar or []
+            },
+            uygunluk=uygun,
+            durum=DurumEnum.TAMAMLANDI
+        )
+        
+        db.add(kalibrasyon)
+        await db.commit()
+        await db.refresh(kalibrasyon)
+        
+        # 5. Word sertifikası oluştur
+        word_path = None
+        try:
+            # Organizasyon bilgilerini al
+            result_org = await db.execute(
+                select(Organizasyon).where(Organizasyon.id == talep.organizasyon_id)
+            )
+            organizasyon = result_org.scalar_one_or_none()
+            
+            # Word belgesi oluştur
+            kalibrasyon_data = {
+                "talep_no": f"KAL-{kalibrasyon.id}",
+                "sicaklik": talep.sicaklik,
+                "nem": talep.nem,
+                "uygunluk": uygun,
+                "olcum_verileri": {
+                    "dis_olcum": [o.dict() for o in talep.dis_olcum],
+                    "ic_olcum": [o.dict() for o in talep.ic_olcum] if talep.ic_olcum else [],
+                    "derinlik_olcum": [o.dict() for o in talep.derinlik_olcum] if talep.derinlik_olcum else [],
+                    "kademe_olcum": [o.dict() for o in talep.kademe_olcum] if talep.kademe_olcum else [],
+                    "fonksiyonellik": talep.fonksiyonellik.dict()
+                }
+            }
+            
+            cihaz_data = {
+                "marka": cihaz.marka,
+                "model": cihaz.model,
+                "seri_no": cihaz.seri_no,
+                "olcme_araligi": cihaz.olcme_araligi
+            }
+            
+            organizasyon_data = {
+                "musteri_adi": organizasyon.musteri_adi if organizasyon else "N/A",
+                "adres": organizasyon.musteri_adres if organizasyon else "N/A"
+            }
+            
+            word_path = create_kumpas_certificate(
+                kalibrasyon_data,
+                cihaz_data,
+                organizasyon_data,
+                UPLOAD_DIR
+            )
+            
+            # Word dosya adını çıkar
+            word_filename = Path(word_path).name if word_path else None
+            
+            print(f"✅ Word sertifikası oluşturuldu: {word_path}")
+        except Exception as word_error:
+            print(f"⚠️ Word sertifikası oluşturulamadı: {str(word_error)}")
+            import traceback
+            print(traceback.format_exc())
+            word_filename = None
+        
+        return {
+            "success": True,
+            "kalibrasyon_id": kalibrasyon.id,
+            "cihaz_id": cihaz.id,
+            "uygunluk": uygun,
+            "uygunluk_mesaji": "UYGUN" if uygun else "UYGUN DEĞİL",
+            "word_path": word_path,
+            "word_filename": word_filename,
+            "hesaplanan_sapmalar": {
+                "dis_olcum": [{"referans": o.referans_deger, "okunan": o.okunan_deger, "sapma": o.sapma} for o in talep.dis_olcum]
+            }
+        }
+    except Exception as e:
+        import traceback
+        print(f"❌ HATA: {str(e)}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=400, detail=f"Kalibrasyon kaydı oluşturulamadı: {str(e)}")
+
+
+@app.put("/api/calibration/kumpas/{kalibrasyon_id}")
+async def update_kumpas_calibration(kalibrasyon_id: int, payload: dict, db: AsyncSession = Depends(get_db)):
+    """KUMPAS kalibrasyon kaydını güncelle"""
+    try:
+        from sqlalchemy.orm import selectinload
+        import json
+        
+        print(f"🔄 Kalibrasyon güncelleniyor: {kalibrasyon_id}", flush=True)
+        print(f"📦 Gelen payload: {json.dumps(payload, indent=2, ensure_ascii=False)}", flush=True)
+        
+        # Mevcut kaydı bul (ilişkileri eager load)
+        result = await db.execute(
+            select(Kalibrasyon)
+            .options(
+                selectinload(Kalibrasyon.cihaz),
+                selectinload(Kalibrasyon.organizasyon)
+            )
+            .where(Kalibrasyon.id == kalibrasyon_id)
+        )
+        kalibrasyon = result.scalar_one_or_none()
+        
+        if not kalibrasyon:
+            raise HTTPException(status_code=404, detail="Kalibrasyon kaydı bulunamadı")
+        
+        # Cihaz bilgilerini güncelle (varsa)
+        if kalibrasyon.cihaz:
+            if 'seri_no' in payload:
+                kalibrasyon.cihaz.seri_no = payload['seri_no']
+            if 'marka' in payload:
+                kalibrasyon.cihaz.marka = payload['marka']
+            if 'model' in payload:
+                kalibrasyon.cihaz.model = payload['model']
+        
+        # Ölçüm verilerini güncelle
+        if 'olcum_verileri' in payload:
+            kalibrasyon.olcum_verileri = payload['olcum_verileri']
+            # JSON alanı değiştiğini SQLAlchemy'ye bildir
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(kalibrasyon, 'olcum_verileri')
+            print(f"📝 Ölçüm verileri güncellendi ve işaretlendi", flush=True)
+        
+        # Çevre koşulları - Flag modified ile işaretle
+        from sqlalchemy.orm.attributes import flag_modified
+        if 'sicaklik' in payload:
+            kalibrasyon.sicaklik = float(payload['sicaklik'])
+            flag_modified(kalibrasyon, 'sicaklik')
+            print(f"🌡️ Sıcaklık: {kalibrasyon.sicaklik}", flush=True)
+        if 'nem' in payload:
+            kalibrasyon.nem = float(payload['nem'])
+            flag_modified(kalibrasyon, 'nem')
+            print(f"💧 Nem: {kalibrasyon.nem}", flush=True)
+        
+        # Değişiklikleri kaydet
+        from datetime import datetime
+        from sqlalchemy import inspect
+        kalibrasyon.updated_at = datetime.now()
+        
+        # SQLAlchemy state kontrolü
+        state = inspect(kalibrasyon)
+        print(f"� Obje dirty mi? {state.modified}", flush=True)
+        print(f"🔍 Değişen alanlar: {state.attrs.keys()}", flush=True)
+        print(f"�💾 Commit öncesi - Sıcaklık: {kalibrasyon.sicaklik}, nem: {kalibrasyon.nem}", flush=True)
+        
+        await db.commit()
+        print(f"✅ Kalibrasyon güncellendi ve commit edildi: {kalibrasyon_id}", flush=True)
+        
+        return {
+            "message": "Kalibrasyon başarıyla güncellendi",
+            "kalibrasyon_id": kalibrasyon.id,
+            "uygunluk": kalibrasyon.uygunluk
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"❌ GÜNCELLEME HATASI: {str(e)}", flush=True)
+        print(traceback.format_exc(), flush=True)
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=f"Güncelleme başarısız: {str(e)}")
+
+
+@app.post("/api/calibration/kumpas/{kalibrasyon_id}/generate-word")
+async def generate_kumpas_word(kalibrasyon_id: int, db: AsyncSession = Depends(get_db)):
+    """KUMPAS kalibrasyonu için Word sertifikası oluştur"""
+    try:
+        from sqlalchemy.orm import selectinload
+        from kumpas_word_generator import create_kumpas_certificate
+        
+        print(f"📄 Word sertifikası oluşturuluyor: {kalibrasyon_id}", flush=True)
+        
+        # Kaydı bul (ilişkileri eager load)
+        result = await db.execute(
+            select(Kalibrasyon)
+            .options(
+                selectinload(Kalibrasyon.cihaz),
+                selectinload(Kalibrasyon.organizasyon)
+            )
+            .where(Kalibrasyon.id == kalibrasyon_id)
+        )
+        kalibrasyon = result.scalar_one_or_none()
+        
+        if not kalibrasyon:
+            raise HTTPException(status_code=404, detail="Kalibrasyon kaydı bulunamadı")
+        
+        kalibrasyon_data_dict = {
+            'sicaklik': kalibrasyon.sicaklik,
+            'nem': kalibrasyon.nem,
+            'olcum_verileri': kalibrasyon.olcum_verileri,
+            'created_at': kalibrasyon.created_at
+        }
+        
+        cihaz_data_dict = {
+            'marka': kalibrasyon.cihaz.marka,
+            'model': kalibrasyon.cihaz.model,
+            'seri_no': kalibrasyon.cihaz.seri_no,
+            'olcme_araligi': kalibrasyon.cihaz.olcme_araligi,
+            'cozunurluk': kalibrasyon.cihaz.cozunurluk
+        }
+        
+        organizasyon_data_dict = {
+            'ad': kalibrasyon.organizasyon.ad,
+            'musteri_adi': kalibrasyon.organizasyon.musteri_adi,
+            'musteri_adres': kalibrasyon.organizasyon.musteri_adres
+        }
+        
+        word_file_path = create_kumpas_certificate(
+            kalibrasyon_data=kalibrasyon_data_dict,
+            cihaz_data=cihaz_data_dict,
+            organizasyon_data=organizasyon_data_dict,
+            output_dir=UPLOAD_DIR
+        )
+        
+        # Sadece filename'i al (uploads/KUMPAS_Sertifika_X.docx -> KUMPAS_Sertifika_X.docx)
+        from pathlib import Path
+        word_filename = Path(word_file_path).name
+        
+        print(f"✅ Word sertifikası oluşturuldu: {word_filename}", flush=True)
+        
+        return {
+            "message": "Word sertifikası başarıyla oluşturuldu",
+            "word_filename": word_filename
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"❌ WORD OLUŞTURMA HATASI: {str(e)}", flush=True)
+        print(traceback.format_exc(), flush=True)
+        raise HTTPException(status_code=400, detail=f"Word oluşturma başarısız: {str(e)}")
+
+
+@app.get("/api/calibration/kumpas/list")
+async def list_kumpas_calibrations(db: AsyncSession = Depends(get_db)):
+    """
+    Tüm KUMPAS kalibrasyonlarını listele
+    """
+    try:
+        from sqlalchemy.orm import selectinload
+        
+        print("� KUMPAS listesi çekiliyor...", flush=True)
+        
+        # Tüm kalibrasyonları getir
+        result = await db.execute(
+            select(Kalibrasyon)
+            .options(
+                selectinload(Kalibrasyon.cihaz),
+                selectinload(Kalibrasyon.organizasyon)
+            )
+            .order_by(desc(Kalibrasyon.created_at))
+        )
+        kalibrasyonlar = result.scalars().all()
+        
+        # KUMPAS olanları filtrele
+        kumpas_list = [k for k in kalibrasyonlar if k.cihaz and k.cihaz.cihaz_tipi == CihazTipiEnum.KUMPAS]
+        print(f"✅ {len(kumpas_list)} KUMPAS kaydı bulundu", flush=True)
+        
+        result_list = []
+        for kal in kumpas_list:
+            # Word dosyasını bul
+            from datetime import timezone
+            word_filename = None
+            all_word_files = list(UPLOAD_DIR.glob("KUMPAS_Sertifika_*.docx"))
+            if all_word_files:
+                all_word_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                for wf in all_word_files:
+                    file_time = datetime.fromtimestamp(wf.stat().st_mtime, tz=timezone.utc)
+                    kal_time = kal.created_at.replace(tzinfo=timezone.utc) if not kal.created_at.tzinfo else kal.created_at
+                    if abs((file_time - kal_time).total_seconds()) < 120:  # 2 dakika tolerans
+                        word_filename = wf.name
+                        break
+            
+            result_list.append({
+                "id": kal.id,
+                "sertifika_no": f"AS-{kal.created_at.strftime('%Y%m%d-%H%M%S')}",
+                "organizasyon": {
+                    "id": kal.organizasyon.id,
+                    "ad": kal.organizasyon.ad,
+                    "musteri_adi": kal.organizasyon.musteri_adi
+                },
+                "cihaz": {
+                    "id": kal.cihaz.id,
+                    "marka": kal.cihaz.marka,
+                    "model": kal.cihaz.model,
+                    "seri_no": kal.cihaz.seri_no,
+                },
+                "uygunluk": kal.uygunluk,
+                "durum": kal.durum,
+                "created_at": kal.created_at.isoformat(),
+                "word_filename": word_filename
+            })
+        
+        return {"kalibrasyonlar": result_list, "total": len(result_list)}
+    
+    except Exception as e:
+        import traceback
+        print(f"❌ Hata: {str(e)}", flush=True)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/calibration/kumpas/{kalibrasyon_id}")
+async def get_kumpas_calibration(kalibrasyon_id: int, db: AsyncSession = Depends(get_db)):
+    """KUMPAS kalibrasyon kaydını getir"""
+    from sqlalchemy.orm import selectinload
+    
+    result = await db.execute(
+        select(Kalibrasyon)
+        .options(
+            selectinload(Kalibrasyon.cihaz),
+            selectinload(Kalibrasyon.organizasyon)
+        )
+        .where(Kalibrasyon.id == kalibrasyon_id)
+    )
+    kalibrasyon = result.scalar_one_or_none()
+    
+    if not kalibrasyon:
+        raise HTTPException(status_code=404, detail="Kalibrasyon kaydı bulunamadı")
+    
+    return {
+        "id": kalibrasyon.id,
+        "organizasyon": {
+            "id": kalibrasyon.organizasyon.id,
+            "ad": kalibrasyon.organizasyon.ad,
+            "musteri_adi": kalibrasyon.organizasyon.musteri_adi
+        },
+        "cihaz": {
+            "id": kalibrasyon.cihaz.id,
+            "marka": kalibrasyon.cihaz.marka,
+            "model": kalibrasyon.cihaz.model,
+            "seri_no": kalibrasyon.cihaz.seri_no,
+            "olcme_araligi": kalibrasyon.cihaz.olcme_araligi,
+            "cozunurluk": kalibrasyon.cihaz.cozunurluk
+        },
+        "sicaklik": kalibrasyon.sicaklik,
+        "nem": kalibrasyon.nem,
+        "olcum_verileri": kalibrasyon.olcum_verileri,
+        "uygunluk": kalibrasyon.uygunluk,
+        "durum": kalibrasyon.durum,
+        "created_at": kalibrasyon.created_at.isoformat()
+    }
+
+
+@app.get("/api/download/word/{filename}")
+async def download_word_file(filename: str):
+    """
+    Word sertifikası dosyasını indir
+    """
+    file_path = UPLOAD_DIR / filename
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Dosya bulunamadı")
+    
+    return FileResponse(
+        path=str(file_path),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=filename
+    )
 
 
 if __name__ == "__main__":

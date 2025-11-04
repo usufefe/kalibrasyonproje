@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:io';
 import 'report_page.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'dart:html' as html;
-import 'dart:async';
+import 'package:record/record.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 class RecordPage extends StatefulWidget {
   const RecordPage({super.key});
@@ -18,48 +19,46 @@ class _RecordPageState extends State<RecordPage> {
   bool _isProcessing = false;
   bool _hasRecording = false;
   String _transcribedText = '';
-  html.MediaRecorder? _mediaRecorder;
-  List<html.Blob> _recordedChunks = [];
-  html.Blob? _audioBlob;
+  final AudioRecorder _audioRecorder = AudioRecorder();
+  String? _audioPath;
   
   // Görsel analiz için yeni değişkenler
-  html.Blob? _imageBlob;
+  String? _imagePath;
   String? _imageBase64;
   Map<String, dynamic>? _imageAnalysis;
   bool _hasImage = false;
 
   @override
   void dispose() {
+    _audioRecorder.dispose();
     super.dispose();
   }
 
   Future<void> _startRecording() async {
     try {
-      final stream = await html.window.navigator.mediaDevices!.getUserMedia({'audio': true});
-      
-      _mediaRecorder = html.MediaRecorder(stream);
-      _recordedChunks.clear();
-      
-      _mediaRecorder!.addEventListener('dataavailable', (event) {
-        final blobEvent = event as html.BlobEvent;
-        if (blobEvent.data != null && blobEvent.data!.size > 0) {
-          _recordedChunks.add(blobEvent.data!);
-        }
-      });
-      
-      _mediaRecorder!.addEventListener('stop', (event) {
-        _audioBlob = html.Blob(_recordedChunks, 'audio/webm');
-      });
-      
-      _mediaRecorder!.start();
-      
-      setState(() {
-        _isRecording = true;
-      });
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Ses kaydı başladı - konuşmaya başlayabilirsiniz!')),
-      );
+      // İzin kontrolü
+      if (await _audioRecorder.hasPermission()) {
+        // Geçici dizinde kayıt dosyası oluştur
+        final directory = await getTemporaryDirectory();
+        _audioPath = '${directory.path}/recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
+        
+        await _audioRecorder.start(
+          const RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 128000,
+            sampleRate: 44100,
+          ),
+          path: _audioPath!,
+        );
+        
+        setState(() {
+          _isRecording = true;
+        });
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Ses kaydı başladı - konuşmaya başlayabilirsiniz!')),
+        );
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Mikrofon erişimi reddedildi: $e')),
@@ -68,20 +67,21 @@ class _RecordPageState extends State<RecordPage> {
   }
 
   Future<void> _stopRecording() async {
-    if (_mediaRecorder != null) {
-      _mediaRecorder!.stop();
-      _mediaRecorder!.stream!.getTracks().forEach((track) => track.stop());
-      
-      // Kaydın tamamlanması için kısa bir süre bekle
-      await Future.delayed(const Duration(milliseconds: 500));
+    try {
+      final path = await _audioRecorder.stop();
       
       setState(() {
         _isRecording = false;
         _hasRecording = true;
+        _audioPath = path;
       });
       
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Ses kaydı tamamlandı! Şimdi rapor oluşturabilirsiniz.')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Kayıt durdurulamadı: $e')),
       );
     }
   }
@@ -93,64 +93,54 @@ class _RecordPageState extends State<RecordPage> {
         _isProcessing = true;
       });
 
-      final html.FileUploadInputElement uploadInput = html.FileUploadInputElement();
-      uploadInput.accept = 'image/*';
-      uploadInput.click();
+      // file_picker kullanarak resim seç
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+      );
 
-      await uploadInput.onChange.first;
-
-      final html.File? file = uploadInput.files?.first;
-      if (file == null) {
+      if (result == null || result.files.isEmpty) {
         setState(() {
           _isProcessing = false;
         });
         return;
       }
 
-      // Dosyayı oku
-      final reader = html.FileReader();
-      reader.readAsArrayBuffer(file);
-      await reader.onLoad.first;
+      final file = result.files.first;
+      _imagePath = file.path;
+      
+      // Dosyayı oku ve base64'e çevir
+      final bytes = await File(_imagePath!).readAsBytes();
+      _imageBase64 = base64Encode(bytes);
 
-      final data = reader.result as List<int>;
-      _imageBlob = html.Blob([data], file.type);
-      _imageBase64 = base64Encode(data);
-
-      // Backend'e gönder
-      final formData = html.FormData();
-      formData.appendBlob('file', _imageBlob!, file.name);
-
-      final xhr = html.HttpRequest();
-      xhr.open('POST', 'http://localhost:8000/api/analyze-image');
-
-      final completer = Completer<String>();
-
-      xhr.onLoad.listen((event) {
-        if (xhr.status == 200) {
-          completer.complete(xhr.responseText!);
-        } else {
-          completer.completeError('Görsel analiz hatası: ${xhr.status}');
-        }
-      });
-
-      xhr.onError.listen((event) {
-        completer.completeError('Network hatası');
-      });
-
-      xhr.send(formData);
-
-      final analysisText = await completer.future;
-      final analysisData = json.decode(analysisText);
-
-      setState(() {
-        _imageAnalysis = analysisData['analysis'];
-        _hasImage = true;
-        _isProcessing = false;
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Görsel analizi tamamlandı!')),
+      // Backend'e multipart request olarak gönder
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('http://localhost:8000/api/analyze-image'),
       );
+      
+      request.files.add(
+        await http.MultipartFile.fromPath('file', _imagePath!),
+      );
+
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        final analysisData = json.decode(response.body);
+        
+        setState(() {
+          _imageAnalysis = analysisData['analysis'];
+          _hasImage = true;
+          _isProcessing = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Görsel analizi tamamlandı!')),
+        );
+      } else {
+        throw Exception('Görsel analiz hatası: ${response.statusCode}');
+      }
     } catch (e) {
       setState(() {
         _isProcessing = false;
@@ -162,7 +152,7 @@ class _RecordPageState extends State<RecordPage> {
   }
 
   Future<void> _createReport() async {
-    if (!_hasRecording || _audioBlob == null) {
+    if (!_hasRecording || _audioPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Önce ses kaydı yapmalısınız!')),
       );
@@ -175,30 +165,23 @@ class _RecordPageState extends State<RecordPage> {
 
     try {
       // 1. Ses dosyasını metne çevir (Whisper)
-      final formData = html.FormData();
-      formData.appendBlob('file', _audioBlob!, 'recording.webm');
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('http://localhost:8000/api/speech-to-text'),
+      );
       
-      final xhr = html.HttpRequest();
-      xhr.open('POST', 'http://localhost:8000/api/speech-to-text');
+      request.files.add(
+        await http.MultipartFile.fromPath('file', _audioPath!),
+      );
+
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
       
-      final completer = Completer<String>();
+      if (response.statusCode != 200) {
+        throw Exception('Transkripsiyon hatası: ${response.statusCode}');
+      }
       
-      xhr.onLoad.listen((event) {
-        if (xhr.status == 200) {
-          completer.complete(xhr.responseText!);
-        } else {
-          completer.completeError('Transkripsiyon hatası: ${xhr.status}');
-        }
-      });
-      
-      xhr.onError.listen((event) {
-        completer.completeError('Network hatası');
-      });
-      
-      xhr.send(formData);
-      
-      final transcriptionText = await completer.future;
-      final transcriptionData = json.decode(transcriptionText);
+      final transcriptionData = json.decode(response.body);
       _transcribedText = transcriptionData['text'] ?? '';
       
       if (_transcribedText.isEmpty) {
